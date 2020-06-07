@@ -43,7 +43,7 @@ python3 train.py \
 
 ## Pre-trained model
 ```shell
-mkdir -p snapshots/checkpoints/
+mkdir -p snapshots_simple/checkpoints/
 ```
 Download pretrained model from <a href="https://drive.google.com/file/d/1CIwSjlzHW3IlctN_1dfNSIBBLxoUGDix/view?usp=sharing">here</a> into the "snapshots/checkpoints" directory
 
