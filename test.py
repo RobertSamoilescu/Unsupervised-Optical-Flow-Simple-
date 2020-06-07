@@ -11,11 +11,11 @@ import torchvision
 import PIL.Image as pil
 import cv2
 import argparse
+import os
 
 from networks import encoder as ENC
 from networks import decoder as DEC
 from networks import layers as LYR
-from flow_rigid import *
 from util.vis import *
 from util.warp import *
 
@@ -28,36 +28,16 @@ parser.add_argument('--scales', type=list, default=[0, 1, 2, 3])
 parser.add_argument('--height', type=int, default=256)
 parser.add_argument('--width', type=int, default=512)
 parser.add_argument('--batch_size', type=int, default=1)
-parser.add_argument('--video_path', type=str, default='../../upb_dataset/fda66a0473ef4396.mov')
+parser.add_argument('--video_path', type=str, default='raw_dataset/fda66a0473ef4396.mov')
 parser.add_argument('--save_gif', type=str, default='./teaser/fda66a0473ef4396.gif')
-parser.add_argument('--checkpoint_dir', type=str, default='./snapshots')
-parser.add_argument('--model_name', type=str, default='default_final_19.pth')
+parser.add_argument('--checkpoint_dir', type=str, default='./snapshots_simple')
+parser.add_argument('--model_name', type=str, default='default.pth')
 args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# define rigid flow object
-rigid_flow = RigidFlow()
-
 # define ssim
 ssim = LYR.SSIM().to(device)
-
-# define encoder
-encoder = ENC.ResnetEncoder(
-    num_layers=args.num_layers, 
-    pretrained=True, 
-    num_input_images=args.num_input_images
-)
-encoder.encoder.conv1 = nn.Conv2d(12, 64, kernel_size=7, stride=2, padding=3, bias=False)
-encoder = encoder.to(device)
-
-# define decoder
-decoder = DEC.FlowDecoder(
-    num_ch_enc=encoder.num_ch_enc, 
-    scales=args.scales, 
-    num_output_channels=args.num_output_channels, 
-    use_skips=True
-).to(device)
 
 # define simple encoder
 simple_encoder = ENC.ResnetEncoder(
@@ -68,7 +48,7 @@ simple_encoder = ENC.ResnetEncoder(
 
 # define simple decoder
 simple_decoder = DEC.FlowDecoder(
-    num_ch_enc=encoder.num_ch_enc, 
+    num_ch_enc=simple_encoder.num_ch_enc, 
     scales=args.scales, 
     num_output_channels=args.num_output_channels, 
     use_skips=True
@@ -79,21 +59,11 @@ if not os.path.exists("./teaser"):
     os.mkdir("teaser")
 
 def load_checkpoint():
-    global encoder
-    global decoder
     global simple_encoder
     global simple_encoder
-
-    # load complex model
-    path = os.path.join(args.checkpoint_dir, 'checkpoints', "default_complex.pth")
-    state = torch.load(path)
-    encoder.load_state_dict(state['encoder'])
-    decoder.load_state_dict(state['decoder'])
-    encoder.eval()
-    decoder.eval()
 
     # load simple model
-    path = os.path.join(args.checkpoint_dir, 'checkpoints', "default_simple.pth")
+    path = os.path.join(args.checkpoint_dir, 'checkpoints', args.model_name)
     state = torch.load(path)
     simple_encoder.load_state_dict(state['encoder'])
     simple_decoder.load_state_dict(state['decoder'])
@@ -112,49 +82,9 @@ def procees_frame(frame: np.array):
     return frame.float()
 
 
-def get_rigid_flow(img1: torch.tensor, img2: torch.tensor):
-    B, W, H = img1.shape[0], rigid_flow.WIDTH, rigid_flow.HEIGHT
-    img1 = F.interpolate(img1, (H, W))
-    img2 = F.interpolate(img2, (H, W))
-
-    # get pix coords and then flow
-    pix_coords = rigid_flow.get_pix_coords(img1, img2, B)
-    rflow = rigid_flow.get_flow(pix_coords, B)
-    rflow = rflow.transpose(2, 3).transpose(1, 2)
-    rflow = F.interpolate(rflow, (args.height, args.width))
-    return rflow.float()
-
-
 def pipeline(prev_frame: np.array, frame: np.array):
     prev_frame = procees_frame(prev_frame)
     frame = procees_frame(frame)
-
-    # get rigid flow
-    rflow = get_rigid_flow(prev_frame, frame)
-
-    # warped image
-    wframe = warp(prev_frame, rflow)
-
-    # compute error map
-    ssim_loss = ssim(wframe, frame).mean(1, True)
-    l1_loss = torch.abs(wframe - frame).mean(1, True)
-    err_map = 0.85 * ssim_loss + 0.15 * l1_loss
-
-    # get dynamic flow correction
-    input = torch.cat([prev_frame, frame, wframe], dim=1)
-    with torch.no_grad():
-        enc_output = encoder(input, rflow, err_map)
-        dec_output = decoder(enc_output)
-        dflow = dec_output[('flow', 0)]
-
-    # compute dynamic complex flow
-    flow = dflow + rflow
-    flow = flow.squeeze(0).cpu().numpy().transpose(1, 2, 0)
-    color_flow = flow_to_color(flow)
-    
-    # compute rigid complex flow
-    rflow = rflow.squeeze(0).cpu().numpy().transpose(1, 2, 0)
-    color_rflow = flow_to_color(rflow)
 
     # get output from simple model
     input = torch.cat([prev_frame, frame], dim=1)
@@ -166,7 +96,7 @@ def pipeline(prev_frame: np.array, frame: np.array):
     flow = flow.squeeze(0).cpu().numpy().transpose(1, 2, 0)
     color_simple_flow = flow_to_color(flow)
 
-    return np.concatenate([color_simple_flow, color_flow], axis=1)[..., ::-1]
+    return color_simple_flow[..., ::-1]
 
 def test_video():
     all_frames = []
@@ -185,8 +115,8 @@ def test_video():
         prev_frame = frame
 
         frame = cv2.resize(frame, (512, 256))
-        flow = cv2.resize(flow, (1024, 256))
-        frame_flow = np.concatenate([frame, flow], axis=1)
+        flow = cv2.resize(flow, (512, 256))
+        frame_flow = np.concatenate([frame, flow], axis=0)
 
         # Display the resulting frame
         all_frames.append(frame_flow)

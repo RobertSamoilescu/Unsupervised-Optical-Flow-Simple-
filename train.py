@@ -13,7 +13,6 @@ from networks import layers as LYR
 from util.upb_dataset import *
 from util.vis import *
 from util.warp import *
-from flow_rigid import *
 
 import cv2
 import argparse
@@ -81,8 +80,6 @@ decoder_mask = DEC.FlowDecoder(
 # define ssim
 ssim = LYR.SSIM().to(device)
 
-# define rigid flow
-rigid_flow = RigidFlow()
 
 # define optimizer
 params = list(encoder.parameters())
@@ -166,19 +163,6 @@ def load_checkpoint():
 	return state['epoch'], state['rloss']
 
 
-def get_rigid_flow(img1: torch.tensor, img2: torch.tensor):
-	B, W, H = img1.shape[0], rigid_flow.WIDTH, rigid_flow.HEIGHT
-	img1 = F.interpolate(img1, (H, W))
-	img2 = F.interpolate(img2, (H, W))
-
-	# get pix coords and then flow
-	pix_coords = rigid_flow.get_pix_coords(img1, img2, B)
-	rflow = rigid_flow.get_flow(pix_coords, B)
-	rflow = rflow.transpose(2, 3).transpose(1, 2)
-	rflow = F.interpolate(rflow, (args.height, args.width))
-	return rflow.float()
-
-
 def test_sample():
 	global test_iter
 	encoder.eval()
@@ -192,7 +176,6 @@ def test_sample():
 
 	imgs1 = [data[('color_aug', -1, i)].to(device) for i in range(4)]
 	imgs2 = [data[('color_aug', 0, i)].to(device) for i in range(4)]
-	rflow = get_rigid_flow(imgs1[0], imgs2[0])	
 	input = torch.cat((imgs1[0], imgs2[0]), dim=1)
 
 	with torch.no_grad():
@@ -200,7 +183,7 @@ def test_sample():
 		dec_output = decoder(enc_output)
 		dec_mask_output = decoder_mask(enc_output)
 
-	# compute warped image using rigid and dynamic flow
+	# compute warped image
 	flow = dec_output[('flow', 0)]
 	wimg2 = warp(imgs1[0], flow)
 
@@ -248,7 +231,6 @@ if __name__ == "__main__":
 			# extract data
 			imgs1 = [data[('color_aug', -1, i)].to(device) for i in range(4)]
 			imgs2 = [data[('color_aug', 0, i)].to(device) for i in range(4)]
-			rflow = get_rigid_flow(imgs1[0], imgs2[0])
 			input = torch.cat([imgs1[0], imgs2[0]], dim=1)
 			
 			# compute dynamic flow
@@ -262,7 +244,7 @@ if __name__ == "__main__":
 				img2 = imgs2[j]
 				flow = dec_output[('flow', j)]
 
-				# compute warped image using rigid + dynamic flow
+				# compute warped image
 				wimg2 = warp(img1, flow)
 
 				# get mask and compute loss for it
@@ -270,15 +252,14 @@ if __name__ == "__main__":
 				mask = torch.sigmoid(mask)
 				weighting_loss = nn.BCELoss()(mask, torch.ones(mask.shape).to(device))
 
-				# compute reprojection loss
-				# for the warped image using the rigid and dynamic flow
+				# compute reprojection loss for the warped image
 				ssim_loss = ssim(wimg2, img2).mean(1, True)
 				l1_loss = torch.abs(wimg2 - img2).mean(1, True)
 				reprojection_loss = mask * (0.85 * ssim_loss + 0.15 * l1_loss)
 				
 				# smooth loss
-				smooth_loss = get_smooth_loss(flow[:, :1, :, :], img2)
-				smooth_loss += get_smooth_loss(flow[:, 1:, :, :], img2)
+				smooth_loss = LYR.get_smooth_loss(flow[:, :1, :, :], img2)
+				smooth_loss += LYR.get_smooth_loss(flow[:, 1:, :, :], img2)
 
 				# total loss
 				loss += (reprojection_loss.mean() + 0.2 * weighting_loss +  0.01 * smooth_loss) / 2**j 

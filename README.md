@@ -45,12 +45,12 @@ python3 train.py \
 ```shell
 mkdir -p snapshots/checkpoints/
 ```
-Download pretrained model from <a href="">here</a> into the "snapshots/checkpoints" directory
+Download pretrained model from <a href="https://drive.google.com/file/d/1CIwSjlzHW3IlctN_1dfNSIBBLxoUGDix/view?usp=sharing">here</a> into the "snapshots/checkpoints" directory
 
 
 ## Test model
 
-The checkpoint should be present in "snaphsots/checkpoints" directory
+The checkpoint should be present in "snaphsots_simple/checkpoints" directory
 
 ```shell
 python3 test.py \
